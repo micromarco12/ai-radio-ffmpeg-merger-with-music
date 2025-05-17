@@ -8,14 +8,12 @@ const path = require("path");
 const router = express.Router();
 const config = require("./settings.json");
 
-// Cloudinary config
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Download helper
 const downloadFile = async (url, outputPath) => {
   const writer = fs.createWriteStream(outputPath);
   const response = await axios({ url, method: "GET", responseType: "stream" });
@@ -26,72 +24,48 @@ const downloadFile = async (url, outputPath) => {
   });
 };
 
-// Merge helper
-const mergeAudioFiles = async (filePaths, musicPath, outputPath) => {
+const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertIndex) => {
   const tempDir = path.dirname(outputPath);
   const convertedDir = path.join(tempDir, "converted");
   fs.mkdirSync(convertedDir, { recursive: true });
 
   const convertedFiles = [];
 
-  // Step 1: Convert TTS clips to stereo, 44.1kHz
   for (let i = 0; i < filePaths.length; i++) {
     const input = filePaths[i];
     const output = path.join(convertedDir, `converted-${i}.mp3`);
-
     await new Promise((resolve, reject) => {
-      exec(
-        `ffmpeg -i "${input}" -ac 2 -ar 44100 -y "${output}"`,
-        (err) => (err ? reject(err) : resolve())
-      );
+      exec(`ffmpeg -i "${input}" -ac 2 -ar 44100 -y "${output}"`, (err) => err ? reject(err) : resolve());
     });
-
     convertedFiles.push(output);
   }
 
-  // Step 2: Concatenate all speech clips
-  const speechConcat = path.join(tempDir, "speech.mp3");
-  const concatList = convertedFiles.map(fp => `file '${fp}'`).join("\n");
-  const concatFile = path.join(tempDir, "concat.txt");
-  fs.writeFileSync(concatFile, concatList);
-
-  await new Promise((resolve, reject) => {
-    exec(
-      `ffmpeg -f concat -safe 0 -i "${concatFile}" -c:a libmp3lame -b:a 192k -ar 44100 -ac 2 -y "${speechConcat}"`,
-      (err) => (err ? reject(err) : resolve())
-    );
-  });
-
-  // Step 3: Trim & fade music
   const fadedMusic = path.join(tempDir, "music-faded.mp3");
   await new Promise((resolve, reject) => {
-    exec(
-      `ffmpeg -i "${musicPath}" -t 30 -af "afade=t=in:ss=0:d=2,afade=t=out:st=28:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`,
-      (err) => (err ? reject(err) : resolve())
-    );
+    exec(`ffmpeg -i "${musicPath}" -t 30 -af "afade=t=in:ss=0:d=2,afade=t=out:st=28:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
   });
 
-  // Step 4: Final concat of speech + music
-  const finalList = `file '${speechConcat}'\nfile '${fadedMusic}'`;
-  const finalListFile = path.join(tempDir, "final-list.txt");
-  fs.writeFileSync(finalListFile, finalList);
+  const finalListPath = path.join(tempDir, "final-list.txt");
+  const finalConcatList = [];
+
+  for (let i = 0; i < convertedFiles.length; i++) {
+    finalConcatList.push(`file '${convertedFiles[i]}'`);
+    if (i === musicInsertIndex) {
+      finalConcatList.push(`file '${fadedMusic}'`);
+    }
+  }
+
+  fs.writeFileSync(finalListPath, finalConcatList.join("\n"));
 
   await new Promise((resolve, reject) => {
-    exec(
-      `ffmpeg -f concat -safe 0 -i "${finalListFile}" -c:a libmp3lame -b:a 256k -ar 44100 -ac 2 -y "${outputPath}"`,
-      (err) => (err ? reject(err) : resolve())
-    );
+    exec(`ffmpeg -f concat -safe 0 -i "${finalListPath}" -c:a libmp3lame -b:a 256k -ar 44100 -ac 2 -y "${outputPath}"`, (err) => err ? reject(err) : resolve());
   });
 
-  // Cleanup
   fs.rmSync(convertedDir, { recursive: true, force: true });
-  fs.unlinkSync(concatFile);
-  fs.unlinkSync(finalListFile);
-  fs.unlinkSync(speechConcat);
+  fs.unlinkSync(finalListPath);
   fs.unlinkSync(fadedMusic);
 };
 
-// Upload to Cloudinary using proper name
 const uploadToCloudinary = (filePath, folder, outputName) => {
   return new Promise((resolve, reject) => {
     cloudinary.uploader.upload(
@@ -99,8 +73,8 @@ const uploadToCloudinary = (filePath, folder, outputName) => {
       {
         resource_type: "video",
         folder,
-        public_id: path.parse(outputName).name, // ← strips `.mp3`
-        overwrite: true
+        public_id: path.parse(outputName).name,
+        overwrite: true,
       },
       (error, result) => {
         if (error) reject(error);
@@ -110,13 +84,12 @@ const uploadToCloudinary = (filePath, folder, outputName) => {
   });
 };
 
-// Main /merge route
 router.post("/merge", async (req, res) => {
   console.log("🔥🔥🔥 MERGE-AUDIO REQUEST RECEIVED 🔥🔥🔥");
   console.log("🎧 Request body:", JSON.stringify(req.body, null, 2));
 
   try {
-    const { files, audioUrls, musicUrl, outputName } = req.body;
+    const { files, audioUrls, musicUrl, outputName, musicBreakIndex } = req.body;
     const inputUrls = audioUrls || files;
 
     if (!Array.isArray(inputUrls) || inputUrls.length === 0 || !musicUrl || !outputName) {
@@ -137,9 +110,14 @@ router.post("/merge", async (req, res) => {
     await downloadFile(musicUrl, musicPath);
 
     const finalOutput = path.join(tempDir, outputName);
-    await mergeAudioFiles(audioPaths, musicPath, finalOutput);
+    await mergeAudioFiles(audioPaths, musicPath, finalOutput, musicBreakIndex);
 
     const cloudUrl = await uploadToCloudinary(finalOutput, "audio-webflow", outputName);
+
+    // CLEANUP downloaded speech clips
+    audioPaths.forEach(p => {
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    });
 
     fs.rmSync(tempDir, { recursive: true, force: true });
 
