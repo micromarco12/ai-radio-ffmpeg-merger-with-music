@@ -1,3 +1,6 @@
+console.log("🔥🔥🔥 MERGE-AUDIO REQUEST RECEIVED 🔥🔥🔥");
+console.log("🎧 Request body:", JSON.stringify(req.body, null, 2));
+
 const express = require("express");
 const axios = require("axios");
 const fs = require("fs");
