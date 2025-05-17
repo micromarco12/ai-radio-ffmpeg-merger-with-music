@@ -34,7 +34,7 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath) => {
 
   const convertedFiles = [];
 
-  // Convert each clip to stereo, 44.1kHz
+  // Step 1: Convert TTS clips to stereo, 44.1kHz
   for (let i = 0; i < filePaths.length; i++) {
     const input = filePaths[i];
     const output = path.join(convertedDir, `converted-${i}.mp3`);
@@ -49,7 +49,7 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath) => {
     convertedFiles.push(output);
   }
 
-  // Concatenate speech into single track
+  // Step 2: Concatenate all speech clips
   const speechConcat = path.join(tempDir, "speech.mp3");
   const concatList = convertedFiles.map(fp => `file '${fp}'`).join("\n");
   const concatFile = path.join(tempDir, "concat.txt");
@@ -62,16 +62,16 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath) => {
     );
   });
 
-  // Fade music (optional, but we’ll include it)
+  // Step 3: Trim & fade music
   const fadedMusic = path.join(tempDir, "music-faded.mp3");
   await new Promise((resolve, reject) => {
     exec(
-      `ffmpeg -i "${musicPath}" -af "afade=t=in:ss=0:d=2,afade=t=out:st=18:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`,
+      `ffmpeg -i "${musicPath}" -t 30 -af "afade=t=in:ss=0:d=2,afade=t=out:st=28:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`,
       (err) => (err ? reject(err) : resolve())
     );
   });
 
-  // Final concat of speech + music
+  // Step 4: Final concat of speech + music
   const finalList = `file '${speechConcat}'\nfile '${fadedMusic}'`;
   const finalListFile = path.join(tempDir, "final-list.txt");
   fs.writeFileSync(finalListFile, finalList);
@@ -91,11 +91,17 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath) => {
   fs.unlinkSync(fadedMusic);
 };
 
-const uploadToCloudinary = (filePath, folder) => {
+// Upload to Cloudinary using proper name
+const uploadToCloudinary = (filePath, folder, outputName) => {
   return new Promise((resolve, reject) => {
     cloudinary.uploader.upload(
       filePath,
-      { resource_type: "video", folder },
+      {
+        resource_type: "video",
+        folder,
+        public_id: path.parse(outputName).name, // ← strips `.mp3`
+        overwrite: true
+      },
       (error, result) => {
         if (error) reject(error);
         else resolve(result.secure_url);
@@ -104,7 +110,7 @@ const uploadToCloudinary = (filePath, folder) => {
   });
 };
 
-// Main route
+// Main /merge route
 router.post("/merge", async (req, res) => {
   console.log("🔥🔥🔥 MERGE-AUDIO REQUEST RECEIVED 🔥🔥🔥");
   console.log("🎧 Request body:", JSON.stringify(req.body, null, 2));
@@ -133,7 +139,7 @@ router.post("/merge", async (req, res) => {
     const finalOutput = path.join(tempDir, outputName);
     await mergeAudioFiles(audioPaths, musicPath, finalOutput);
 
-    const cloudUrl = await uploadToCloudinary(finalOutput, "audio-webflow");
+    const cloudUrl = await uploadToCloudinary(finalOutput, "audio-webflow", outputName);
 
     fs.rmSync(tempDir, { recursive: true, force: true });
 
