@@ -22,124 +22,87 @@ const getAudioDuration = (filePath) => {
       `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
       (error, stdout) => {
         if (error) reject(error);
-        else resolve(parseFloat(stdout.trim()));
+        else resolve(parseFloat(stdout));
       }
     );
   });
 };
 
-const getCompressorPreset = (presetName) => {
-  switch ((presetName || "").toLowerCase()) {
-    case "light":
-      return "acompressor=threshold=-15dB:ratio=2:attack=20:release=300:makeup=2";
-    case "radio":
-      return "acompressor=threshold=-20dB:ratio=4:attack=10:release=250:makeup=4";
-    case "crushed":
-      return "acompressor=threshold=-40dB:ratio=20:attack=1:release=50:makeup=15";
-    default:
-      return "acompressor=threshold=-18dB:ratio=3:attack=15:release=200:makeup=3";
-  }
+const downloadFile = async (url, outputPath) => {
+  const writer = fs.createWriteStream(outputPath);
+  const response = await axios({ url, method: "GET", responseType: "stream" });
+  response.data.pipe(writer);
+  return new Promise((resolve, reject) => {
+    writer.on("finish", resolve);
+    writer.on("error", reject);
+  });
 };
 
-router.post("/", async (req, res) => {
-  console.log("🟡 Incoming merge request");
-  console.log("📦 Body:", req.body);
+const mergeAudioFiles = async (filePaths, musicPath, outputPath) => {
+  const inputs = filePaths
+    .map((file, i) => `-i "${file}"`)
+    .concat([`-i "${musicPath}"`])
+    .join(" ");
 
-  const { files, outputName } = req.body;
+  const filterComplexParts = filePaths.map((_, i) => `[${i}:a]`).join("") + `concat=n=${filePaths.length}:v=0:a=1[aud]`;
+  const filter = `${filterComplexParts}; [aud][${filePaths.length}:a]amix=inputs=2:duration=first:dropout_transition=3[aout]`;
 
-  if (!files || !Array.isArray(files) || files.length === 0) {
-    return res.status(400).json({ error: "Missing or invalid 'files' array" });
-  }
-
-  const silenceMs = config.silenceMs || 300;
-  const fadeMs = config.fadeMs || 150;
-  const preset = config.preset || "normal";
-  const applyCompression = true;
-  const compressor = applyCompression ? getCompressorPreset(preset) : "";
-  const tempDir = `temp_${uuidv4()}`;
-  const outputFile = outputName.endsWith(".mp3") ? outputName : `${outputName}.mp3`;
-  const finalPath = path.join(tempDir, outputFile);
-
-  let finalInputs = [];
-
-  try {
-    fs.mkdirSync(tempDir);
-
-    for (let i = 0; i < files.length; i++) {
-      const filePath = path.join(tempDir, `part${i}.mp3`);
-      const fadePath = path.join(tempDir, `fade${i}.wav`);
-      const silencePath = path.join(tempDir, `silence${i}.wav`);
-
-      const response = await axios.get(files[i], { responseType: "stream" });
-      const writer = fs.createWriteStream(filePath);
-      response.data.pipe(writer);
-
-      await new Promise((resolve, reject) => {
-        writer.on("finish", resolve);
-        writer.on("error", reject);
-      });
-
-      const duration = await getAudioDuration(filePath);
-      const fadeOutStart = Math.max(0, duration - fadeMs / 1000);
-
-      const fadeCmd = `ffmpeg -i "${filePath}" -af "afade=t=in:st=0:d=${fadeMs / 1000},afade=t=out:st=${fadeOutStart.toFixed(2)}:d=${fadeMs / 1000}" -ar 44100 -ac 2 -y "${fadePath}"`;
-      await new Promise((resolve, reject) => {
-        exec(fadeCmd, (err) => (err ? reject(err) : resolve()));
-      });
-
-      finalInputs.push(fadePath);
-
-      if (silenceMs > 0 && i < files.length - 1) {
-        const silenceCmd = `ffmpeg -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t ${silenceMs / 1000} -y "${silencePath}"`;
-        await new Promise((resolve, reject) => {
-          exec(silenceCmd, (err) => (err ? reject(err) : resolve()));
-        });
-        finalInputs.push(silencePath);
+  return new Promise((resolve, reject) => {
+    exec(
+      `ffmpeg ${inputs} -filter_complex "${filter}" -map "[aout]" -y "${outputPath}"`,
+      (error) => {
+        if (error) reject(error);
+        else resolve();
       }
+    );
+  });
+};
+
+const uploadToCloudinary = (filePath, folder) => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.upload(
+      filePath,
+      { resource_type: "video", folder },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result.secure_url);
+      }
+    );
+  });
+};
+
+// Main Route
+router.post("/merge", async (req, res) => {
+  try {
+    const { audioUrls, musicUrl, outputName } = req.body;
+    if (!Array.isArray(audioUrls) || audioUrls.length === 0 || !musicUrl || !outputName) {
+      return res.status(400).json({ error: "Missing required input" });
     }
 
-    const inputArgs = finalInputs.map((file) => `-i "${file}"`).join(" ");
-    const concatFilter = `concat=n=${finalInputs.length}:v=0:a=1${compressor ? "," + compressor : ""}`;
+    const tempDir = path.join(__dirname, "temp", uuidv4());
+    fs.mkdirSync(tempDir, { recursive: true });
 
-    const ffmpegCmd = `ffmpeg ${inputArgs} -filter_complex "${concatFilter}" -acodec libmp3lame -b:a 192k -ar 24000 -y "${finalPath}"`;
-    console.log("🎬 Running FFmpeg with:", ffmpegCmd);
-
-    await new Promise((resolve, reject) => {
-      exec(ffmpegCmd, (err) => (err ? reject(err) : resolve()));
-    });
-
-    // Upload final to Cloudinary
-    const result = await cloudinary.uploader.upload(finalPath, {
-      resource_type: "video",
-      folder: "audio-webflow",
-      public_id: outputFile.replace(".mp3", ""),
-    });
-
-    console.log("☁️ Uploaded final mix:", result.secure_url);
-
-    // 🧹 Clean up chunked audio files from FFmpeg-converter folder
-    try {
-      const cleanup = await cloudinary.api.delete_resources_by_prefix("FFmpeg-converter/", {
-        resource_type: "video",
-        invalidate: true
-      });
-      console.log("🧹 Deleted source chunks:", cleanup);
-    } catch (err) {
-      console.warn("⚠️ Cloudinary cleanup failed:", err.message);
+    const audioPaths = [];
+    for (let i = 0; i < audioUrls.length; i++) {
+      const audioPath = path.join(tempDir, `clip-${i}.mp3`);
+      await downloadFile(audioUrls[i], audioPath);
+      audioPaths.push(audioPath);
     }
 
-    res.json({ finalUrl: result.secure_url });
+    const musicPath = path.join(tempDir, "background.mp3");
+    await downloadFile(musicUrl, musicPath);
 
+    const finalOutput = path.join(tempDir, outputName);
+    await mergeAudioFiles(audioPaths, musicPath, finalOutput);
+
+    const cloudUrl = await uploadToCloudinary(finalOutput, "audio-webflow");
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+
+    return res.json({ url: cloudUrl });
   } catch (err) {
-    console.error("🔥 Merge error:", err.message);
-    res.status(500).json({ error: err.message });
-  } finally {
-    try {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-      console.log("🧼 Temp directory cleaned up");
-    } catch (cleanupErr) {
-      console.warn("⚠️ Local cleanup failed:", cleanupErr.message);
-    }
+    console.error("🔥 Merge Error:", err);
+    res.status(500).json({ error: "Failed to merge audio" });
   }
 });
 
