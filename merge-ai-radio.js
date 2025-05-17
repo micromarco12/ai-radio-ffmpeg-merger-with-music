@@ -15,7 +15,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Helpers
+// Download helper
 const downloadFile = async (url, outputPath) => {
   const writer = fs.createWriteStream(outputPath);
   const response = await axios({ url, method: "GET", responseType: "stream" });
@@ -26,43 +26,65 @@ const downloadFile = async (url, outputPath) => {
   });
 };
 
+// Merge helper
 const mergeAudioFiles = async (filePaths, musicPath, outputPath) => {
   const tempDir = path.dirname(outputPath);
-  const speechConcat = path.join(tempDir, "speech.mp3");
-  const fadedMusic = path.join(tempDir, "music-faded.mp3");
+  const convertedDir = path.join(tempDir, "converted");
+  fs.mkdirSync(convertedDir, { recursive: true });
 
-  // Step 1: Concatenate speech clips
-  const concatList = filePaths.map(fp => `file '${fp}'`).join("\n");
+  const convertedFiles = [];
+
+  // Convert each clip to stereo, 44.1kHz
+  for (let i = 0; i < filePaths.length; i++) {
+    const input = filePaths[i];
+    const output = path.join(convertedDir, `converted-${i}.mp3`);
+
+    await new Promise((resolve, reject) => {
+      exec(
+        `ffmpeg -i "${input}" -ac 2 -ar 44100 -y "${output}"`,
+        (err) => (err ? reject(err) : resolve())
+      );
+    });
+
+    convertedFiles.push(output);
+  }
+
+  // Concatenate speech into single track
+  const speechConcat = path.join(tempDir, "speech.mp3");
+  const concatList = convertedFiles.map(fp => `file '${fp}'`).join("\n");
   const concatFile = path.join(tempDir, "concat.txt");
   fs.writeFileSync(concatFile, concatList);
 
   await new Promise((resolve, reject) => {
-    exec(`ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${speechConcat}"`, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
+    exec(
+      `ffmpeg -f concat -safe 0 -i "${concatFile}" -c:a libmp3lame -b:a 192k -ar 44100 -ac 2 -y "${speechConcat}"`,
+      (err) => (err ? reject(err) : resolve())
+    );
   });
 
-  // Step 2: TEST ONLY — directly copy music instead of fading
-  fs.copyFileSync(musicPath, fadedMusic);
+  // Fade music (optional, but we’ll include it)
+  const fadedMusic = path.join(tempDir, "music-faded.mp3");
+  await new Promise((resolve, reject) => {
+    exec(
+      `ffmpeg -i "${musicPath}" -af "afade=t=in:ss=0:d=2,afade=t=out:st=18:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`,
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
 
-  // Debug log
-  console.log("🧪 Final concat list:");
-  const finalConcatList = `file '${speechConcat}'\nfile '${fadedMusic}'`;
-  console.log(finalConcatList);
-  console.log("🎵 Music file exists?", fs.existsSync(fadedMusic));
-
+  // Final concat of speech + music
+  const finalList = `file '${speechConcat}'\nfile '${fadedMusic}'`;
   const finalListFile = path.join(tempDir, "final-list.txt");
-  fs.writeFileSync(finalListFile, finalConcatList);
+  fs.writeFileSync(finalListFile, finalList);
 
   await new Promise((resolve, reject) => {
-    exec(`ffmpeg -f concat -safe 0 -i "${finalListFile}" -c copy -y "${outputPath}"`, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
+    exec(
+      `ffmpeg -f concat -safe 0 -i "${finalListFile}" -c:a libmp3lame -b:a 256k -ar 44100 -ac 2 -y "${outputPath}"`,
+      (err) => (err ? reject(err) : resolve())
+    );
   });
 
-  // Clean up
+  // Cleanup
+  fs.rmSync(convertedDir, { recursive: true, force: true });
   fs.unlinkSync(concatFile);
   fs.unlinkSync(finalListFile);
   fs.unlinkSync(speechConcat);
@@ -82,13 +104,16 @@ const uploadToCloudinary = (filePath, folder) => {
   });
 };
 
+// Main route
 router.post("/merge", async (req, res) => {
   console.log("🔥🔥🔥 MERGE-AUDIO REQUEST RECEIVED 🔥🔥🔥");
   console.log("🎧 Request body:", JSON.stringify(req.body, null, 2));
 
   try {
-    const { audioUrls, musicUrl, outputName } = req.body;
-    if (!Array.isArray(audioUrls) || audioUrls.length === 0 || !musicUrl || !outputName) {
+    const { files, audioUrls, musicUrl, outputName } = req.body;
+    const inputUrls = audioUrls || files;
+
+    if (!Array.isArray(inputUrls) || inputUrls.length === 0 || !musicUrl || !outputName) {
       return res.status(400).json({ error: "Missing required input" });
     }
 
@@ -96,9 +121,9 @@ router.post("/merge", async (req, res) => {
     fs.mkdirSync(tempDir, { recursive: true });
 
     const audioPaths = [];
-    for (let i = 0; i < audioUrls.length; i++) {
+    for (let i = 0; i < inputUrls.length; i++) {
       const audioPath = path.join(tempDir, `clip-${i}.mp3`);
-      await downloadFile(audioUrls[i], audioPath);
+      await downloadFile(inputUrls[i], audioPath);
       audioPaths.push(audioPath);
     }
 
