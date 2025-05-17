@@ -43,16 +43,15 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath) => {
     });
   });
 
-  // Step 2: Apply fade in/out to the music
-  await new Promise((resolve, reject) => {
-    exec(`ffmpeg -i "${musicPath}" -af "afade=t=in:ss=0:d=2,afade=t=out:st=18:d=2" -y "${fadedMusic}"`, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
+  // Step 2: TEST ONLY — directly copy music instead of fading
+  fs.copyFileSync(musicPath, fadedMusic);
 
-  // Step 3: Combine speech + music
+  // Debug log
+  console.log("🧪 Final concat list:");
   const finalConcatList = `file '${speechConcat}'\nfile '${fadedMusic}'`;
+  console.log(finalConcatList);
+  console.log("🎵 Music file exists?", fs.existsSync(fadedMusic));
+
   const finalListFile = path.join(tempDir, "final-list.txt");
   fs.writeFileSync(finalListFile, finalConcatList);
 
