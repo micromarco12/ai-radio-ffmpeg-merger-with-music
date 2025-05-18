@@ -119,6 +119,17 @@ router.post("/merge", async (req, res) => {
       if (fs.existsSync(p)) fs.unlinkSync(p);
     });
 
+    // ✅ NEW: CLEANUP Cloudinary source chunks
+    try {
+      const cleanup = await cloudinary.api.delete_resources_by_prefix("FFmpeg-converter/", {
+        resource_type: "video",
+        invalidate: true
+      });
+      console.log("🧹 Deleted Cloudinary source chunks:", cleanup);
+    } catch (err) {
+      console.warn("⚠️ Cloudinary cleanup failed:", err.message);
+    }
+
     fs.rmSync(tempDir, { recursive: true, force: true });
 
     return res.json({ url: cloudUrl });
