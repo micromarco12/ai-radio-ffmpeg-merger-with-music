@@ -40,10 +40,10 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
     convertedFiles.push(output);
   }
 
-  const fadedMusic = path.join(tempDir, "music-faded.mp3");
-  await new Promise((resolve, reject) => {
-    exec(`ffmpeg -i "${musicPath}" -t 30 -af "afade=t=in:ss=0:d=2,afade=t=out:st=28:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
-  });
+const fadedMusic = path.join(tempDir, "music-faded.mp3");
+await new Promise((resolve, reject) => {
+  exec(`ffmpeg -i "${musicPath}" -af "afade=t=in:ss=0:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
+});
 
   const finalListPath = path.join(tempDir, "final-list.txt");
   const finalConcatList = [];
