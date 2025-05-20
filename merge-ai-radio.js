@@ -6,7 +6,7 @@ const cloudinary = require("cloudinary").v2;
 const { exec } = require("child_process");
 const path = require("path");
 // Toggle to control music length during testing
-const useShortMusic = true; // ✅ Set to false when you're ready for full songs
+const useShortMusic = false; // ✅ Set to false when you're ready for full songs
 const router = express.Router();
 const config = require("./settings.json");
 
