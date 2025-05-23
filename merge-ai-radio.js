@@ -55,15 +55,25 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
     convertedFiles.push(output);
   }
 
-  const alexPath = convertedFiles[musicInsertIndex];
+  const alexIntroPath = convertedFiles[musicInsertIndex];
+  const alexOutroPath = convertedFiles[musicInsertIndex + 1];
   const musicInput = musicPath;
-  const mixedOutput = path.join(tempDir, "mixed-intro.mp3");
+  const mixedIntro = path.join(tempDir, "mixed-intro.mp3");
+  const mixedOutro = path.join(tempDir, "mixed-outro.mp3");
 
-  const alexDuration = await getAudioDuration(alexPath);
-  const musicOffset = Math.max(0, Math.floor((alexDuration - 3) * 1000));
+  const alexIntroDuration = await getAudioDuration(alexIntroPath);
+  const musicDuration = await getAudioDuration(musicInput);
+
+  const introOffset = Math.max(0, Math.floor((alexIntroDuration - 3) * 1000));
+  const outroOffset = Math.max(0, Math.floor((musicDuration - 3) * 1000));
 
   await new Promise((resolve, reject) => {
-    const cmd = `ffmpeg -i "${alexPath}" -i "${musicInput}" -filter_complex "[0:a]volume=2.0[a0];[1:a]adelay=${musicOffset}|${musicOffset},volume=0.4[bg];[a0][bg]amix=inputs=2:duration=longest:dropout_transition=3" -c:a libmp3lame -b:a 256k -y "${mixedOutput}"`;
+    const cmd = `ffmpeg -i "${alexIntroPath}" -i "${musicInput}" -filter_complex "[0:a]volume=2.5[a0];[1:a]adelay=${introOffset}|${introOffset},volume=0.3[bg];[a0][bg]amix=inputs=2:duration=longest:dropout_transition=3" -c:a libmp3lame -b:a 256k -y "${mixedIntro}"`;
+    exec(cmd, (err) => (err ? reject(err) : resolve()));
+  });
+
+  await new Promise((resolve, reject) => {
+    const cmd = `ffmpeg -i "${musicInput}" -i "${alexOutroPath}" -filter_complex "[0:a]volume=0.3[music];[1:a]adelay=${outroOffset}|${outroOffset},volume=2.5[speech];[music][speech]amix=inputs=2:duration=longest:dropout_transition=3" -c:a libmp3lame -b:a 256k -y "${mixedOutro}"`;
     exec(cmd, (err) => (err ? reject(err) : resolve()));
   });
 
@@ -72,7 +82,9 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
 
   for (let i = 0; i < convertedFiles.length; i++) {
     if (i === musicInsertIndex) {
-      finalConcatList.push(`file '${mixedOutput}'`);
+      finalConcatList.push(`file '${mixedIntro}'`);
+    } else if (i === musicInsertIndex + 1) {
+      finalConcatList.push(`file '${mixedOutro}'`);
     } else {
       finalConcatList.push(`file '${convertedFiles[i]}'`);
     }
@@ -86,7 +98,8 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
 
   fs.rmSync(convertedDir, { recursive: true, force: true });
   fs.unlinkSync(finalListPath);
-  fs.unlinkSync(mixedOutput);
+  fs.unlinkSync(mixedIntro);
+  fs.unlinkSync(mixedOutro);
 };
 
 const uploadToCloudinary = (filePath, folder, outputName) => {
