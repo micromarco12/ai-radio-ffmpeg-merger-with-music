@@ -5,6 +5,8 @@ const { v4: uuidv4 } = require("uuid");
 const cloudinary = require("cloudinary").v2;
 const { exec } = require("child_process");
 const path = require("path");
+// Toggle to control music length during testing
+const useShortMusic = true; // ✅ Set to false when you're ready for full songs
 const router = express.Router();
 const config = require("./settings.json");
 
@@ -40,10 +42,19 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
     convertedFiles.push(output);
   }
 
-  const fadedMusic = path.join(tempDir, "music-faded.mp3");
+const fadedMusic = path.join(tempDir, "music-faded.mp3");
+
+if (useShortMusic) {
+  // Short version: fade in/out and trim to 30s
   await new Promise((resolve, reject) => {
     exec(`ffmpeg -i "${musicPath}" -t 30 -af "afade=t=in:ss=0:d=2,afade=t=out:st=28:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
   });
+} else {
+  // Full version: just fade in
+  await new Promise((resolve, reject) => {
+    exec(`ffmpeg -i "${musicPath}" -af "afade=t=in:ss=0:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
+  });
+}
 
   const finalListPath = path.join(tempDir, "final-list.txt");
   const finalConcatList = [];
