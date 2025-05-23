@@ -32,7 +32,6 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
   fs.mkdirSync(convertedDir, { recursive: true });
 
   const convertedFiles = [];
-
   for (let i = 0; i < filePaths.length; i++) {
     const input = filePaths[i];
     const output = path.join(convertedDir, `converted-${i}.mp3`);
@@ -42,19 +41,17 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
     convertedFiles.push(output);
   }
 
-const fadedMusic = path.join(tempDir, "music-faded.mp3");
+  const fadedMusic = path.join(tempDir, "music-faded.mp3");
 
-if (useShortMusic) {
-  // Short version: fade in/out and trim to 30s
-  await new Promise((resolve, reject) => {
-    exec(`ffmpeg -i "${musicPath}" -t 30 -af "afade=t=in:ss=0:d=2,afade=t=out:st=28:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
-  });
-} else {
-  // Full version: just fade in
-  await new Promise((resolve, reject) => {
-    exec(`ffmpeg -i "${musicPath}" -af "afade=t=in:ss=0:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
-  });
-}
+  if (useShortMusic) {
+    await new Promise((resolve, reject) => {
+      exec(`ffmpeg -i "${musicPath}" -t 30 -af "afade=t=in:ss=0:d=2,afade=t=out:st=28:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
+    });
+  } else {
+    await new Promise((resolve, reject) => {
+      exec(`ffmpeg -i "${musicPath}" -af "afade=t=in:ss=0:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
+    });
+  }
 
   const finalListPath = path.join(tempDir, "final-list.txt");
   const finalConcatList = [];
@@ -62,7 +59,11 @@ if (useShortMusic) {
   for (let i = 0; i < convertedFiles.length; i++) {
     finalConcatList.push(`file '${convertedFiles[i]}'`);
     if (i === musicInsertIndex) {
-      finalConcatList.push(`file '${fadedMusic}'`);
+      const shiftedMusic = path.join(tempDir, "music-shifted.mp3");
+      await new Promise((resolve, reject) => {
+        exec(`ffmpeg -i "${fadedMusic}" -ss 3 -y "${shiftedMusic}"`, (err) => err ? reject(err) : resolve());
+      });
+      finalConcatList.push(`file '${shiftedMusic}'`);
     }
   }
 
@@ -125,12 +126,10 @@ router.post("/merge", async (req, res) => {
 
     const cloudUrl = await uploadToCloudinary(finalOutput, "audio-webflow", outputName);
 
-    // CLEANUP downloaded speech clips
     audioPaths.forEach(p => {
       if (fs.existsSync(p)) fs.unlinkSync(p);
     });
 
-    // ✅ NEW: CLEANUP Cloudinary source chunks
     try {
       const cleanup = await cloudinary.api.delete_resources_by_prefix("FFmpeg-converter/", {
         resource_type: "video",
