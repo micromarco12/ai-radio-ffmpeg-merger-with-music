@@ -63,7 +63,7 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
   const musicOffset = Math.max(0, Math.floor((alexDuration - 3) * 1000));
 
   await new Promise((resolve, reject) => {
-    const cmd = `ffmpeg -i "${alexPath}" -i "${musicInput}" -filter_complex "[1:a]adelay=${musicOffset}|${musicOffset}[bg];[0:a][bg]amix=inputs=2:duration=longest:dropout_transition=3" -c:a libmp3lame -b:a 256k -y "${mixedOutput}"`;
+    const cmd = `ffmpeg -i "${alexPath}" -i "${musicInput}" -filter_complex "[0:a]volume=2.0[a0];[1:a]adelay=${musicOffset}|${musicOffset},volume=0.4[bg];[a0][bg]amix=inputs=2:duration=longest:dropout_transition=3" -c:a libmp3lame -b:a 256k -y "${mixedOutput}"`;
     exec(cmd, (err) => (err ? reject(err) : resolve()));
   });
 
