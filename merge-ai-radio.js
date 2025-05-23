@@ -5,8 +5,8 @@ const { v4: uuidv4 } = require("uuid");
 const cloudinary = require("cloudinary").v2;
 const { exec } = require("child_process");
 const path = require("path");
+const settings = require("./ffmpeg.settings.js");
 
-// ✅ Utility function to get duration of an audio file
 const getAudioDuration = (filePath) => {
   return new Promise((resolve, reject) => {
     exec(
@@ -19,10 +19,8 @@ const getAudioDuration = (filePath) => {
   });
 };
 
-// Toggle to control music length during testing
-const useShortMusic = true; // ✅ Set to false when you're ready for full songs
+const useShortMusic = true;
 const router = express.Router();
-const config = require("./settings.json");
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -56,14 +54,22 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
   }
 
   const alexPath = convertedFiles[musicInsertIndex];
-  const musicInput = musicPath;
+  const normalizedMusic = path.join(tempDir, "music-normalized.mp3");
   const mixedOutput = path.join(tempDir, "mixed-intro.mp3");
 
+  if (settings.normalizeMusic) {
+    await new Promise((resolve, reject) => {
+      exec(`ffmpeg -i "${musicPath}" -af loudnorm=I=-16:LRA=11:TP=-1.5 -ar 44100 -ac 2 -y "${normalizedMusic}"`, (err) => err ? reject(err) : resolve());
+    });
+  } else {
+    fs.copyFileSync(musicPath, normalizedMusic);
+  }
+
   const alexDuration = await getAudioDuration(alexPath);
-  const musicOffset = Math.max(0, Math.floor((alexDuration - 3) * 1000));
+  const musicOffset = Math.max(0, Math.floor((alexDuration - settings.introDelaySeconds) * 1000));
 
   await new Promise((resolve, reject) => {
-    const cmd = `ffmpeg -i "${alexPath}" -i "${musicInput}" -filter_complex "[0:a]volume=2.5[a0];[1:a]adelay=${musicOffset}|${musicOffset},volume=0.3[bg];[a0][bg]amix=inputs=2:duration=longest:dropout_transition=3" -c:a libmp3lame -b:a 256k -y "${mixedOutput}"`;
+    const cmd = `ffmpeg -i "${alexPath}" -i "${normalizedMusic}" -filter_complex "[0:a]volume=${settings.voiceBoost}[a0];[1:a]adelay=${musicOffset}|${musicOffset},volume=${settings.musicReduction}[bg];[a0][bg]amix=inputs=2:duration=longest:dropout_transition=3" -c:a libmp3lame -b:a 256k -y "${mixedOutput}"`;
     exec(cmd, (err) => (err ? reject(err) : resolve()));
   });
 
@@ -87,6 +93,7 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
   fs.rmSync(convertedDir, { recursive: true, force: true });
   fs.unlinkSync(finalListPath);
   fs.unlinkSync(mixedOutput);
+  fs.unlinkSync(normalizedMusic);
 };
 
 const uploadToCloudinary = (filePath, folder, outputName) => {
