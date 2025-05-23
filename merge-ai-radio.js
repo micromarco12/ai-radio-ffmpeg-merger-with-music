@@ -34,7 +34,6 @@ const getAudioDuration = (filePath) => {
     exec(command, (error, stdout, stderr) => {
       if (error) {
         console.error(`FFprobe stderr for ${filePath}: ${stderr}`);
-        // Attempt to provide more specific error feedback
         if (stderr && stderr.includes("No such file or directory")) {
             return reject(new Error(`FFprobe failed: File not found at ${filePath}. ${stderr}`));
         } else if (stderr && stderr.includes("Invalid data found when processing input")) {
@@ -47,6 +46,25 @@ const getAudioDuration = (filePath) => {
       }
       resolve(parseFloat(stdout.trim()));
     });
+  });
+};
+
+// Function to upload to Cloudinary (from your original script structure)
+const uploadToCloudinary = (filePath, folder, outputName) => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.upload(
+      filePath,
+      {
+        resource_type: "video", // Assuming audio is treated as video for storage if mp3
+        folder,
+        public_id: path.parse(outputName).name,
+        overwrite: true,
+      },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result.secure_url);
+      }
+    );
   });
 };
 
@@ -100,29 +118,22 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
   }
   console.log("Processed music file created:", fadedMusic);
 
-  // --- NEW: GET DURATIONS ---
+  // --- GET DURATIONS ---
   let durationAlexAnnounce = 0;
   let durationMusic = 0;
   let durationAlexWelcome = 0;
   const overlapTimeSeconds = 3.0;
 
-  // Ensure musicInsertIndex is a valid index for convertedFiles
   if (musicInsertIndex < 0 || musicInsertIndex >= convertedFiles.length) {
     throw new Error(`Invalid musicInsertIndex ${musicInsertIndex} for convertedFiles array of length ${convertedFiles.length}`);
   }
-  const alexAnnouncePath = convertedFiles[musicInsertIndex]; // Alex's announcement
+  const alexAnnouncePath = convertedFiles[musicInsertIndex];
 
-  // Ensure musicInsertIndex + 2 is a valid index (for Alex's welcome back)
-  // This assumes Jamie's [SILENT] clip (at musicInsertIndex + 1) is present in convertedFiles.
-  // If Jamie's [SILENT] clip is NOT in convertedFiles, then alexWelcomePath would be convertedFiles[musicInsertIndex + 1]
-  // For now, we'll stick to +2 and add a check.
   let alexWelcomePath;
   if (musicInsertIndex + 2 < convertedFiles.length) {
     alexWelcomePath = convertedFiles[musicInsertIndex + 2];
   } else {
     console.warn(`Not enough audio clips after musicInsertIndex to identify Alex's welcome back at index ${musicInsertIndex + 2}. Skipping duration fetch for it.`);
-    // You might want to handle this case more gracefully depending on your flow.
-    // For now, durationAlexWelcome will remain 0 if the path isn't found.
   }
 
   try {
@@ -147,7 +158,6 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
       console.warn(`Alex welcome back clip path not found or invalid: ${alexWelcomePath}. Using duration 0.`);
     }
 
-    // Basic checks for durations related to overlap
     if (durationAlexAnnounce > 0 && durationAlexAnnounce <= overlapTimeSeconds) {
       console.warn(`Warning: Alex's announcement clip (${durationAlexAnnounce}s) is shorter/equal to overlap time (${overlapTimeSeconds}s). Ducking intro might be problematic.`);
     }
@@ -159,28 +169,19 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
     console.error("Error getting audio durations:", err.message);
     throw err; 
   }
-  // --- END NEW: GET DURATIONS ---
+  // --- END GET DURATIONS ---
 
+  // Original FFMPEG concat logic (to be replaced later with ducking logic)
   console.log("Creating final concatenation list...");
   const finalListPath = path.join(tempDir, "final-list.txt");
   const finalConcatList = [];
-
   for (let i = 0; i < convertedFiles.length; i++) {
-    // IMPORTANT: Check if Jamie's [SILENT] turn (at musicInsertIndex + 1) should be skipped
-    // For now, this script includes all convertedFiles.
-    // If Jamie's silent clip is truly silent and has near-zero duration, or if it's an actual file
-    // with "[SILENT]" spoken, including it might be fine.
-    // If it's meant to be a true audio gap, you might want to skip adding convertedFiles[musicInsertIndex + 1]
-    // to finalConcatList if a condition is met (e.g., if it's Jamie's turn and her output was "[SILENT]").
-    // This simplified version concatenates all dialogue files.
-
     finalConcatList.push(`file '${convertedFiles[i]}'`);
-    if (i === musicInsertIndex) { // Music is inserted AFTER Alex's announcement clip
+    if (i === musicInsertIndex) {
       console.log(`Adding music file '${fadedMusic}' to concat list after clip index ${i}`);
       finalConcatList.push(`file '${fadedMusic}'`);
     }
   }
-
   fs.writeFileSync(finalListPath, finalConcatList.join("\n"));
   console.log("Concatenation list created:", finalListPath);
   console.log("Final concatenation list content:\n", finalConcatList.join("\n"));
@@ -222,13 +223,11 @@ router.post("/merge", async (req, res) => {
     return res.status(400).json({ error: "Missing required input: audioUrls (array), musicUrl, outputName, and musicBreakIndex are required." });
   }
   
-  // Ensure musicBreakIndex is a number
   const mBreakIndex = parseInt(musicBreakIndex, 10);
   if (isNaN(mBreakIndex)) {
       console.error(`[${operationId}] Invalid musicBreakIndex: not a number. Value: ${musicBreakIndex}`);
       return res.status(400).json({ error: `Invalid musicBreakIndex: must be a number. Value: ${musicBreakIndex}` });
   }
-
 
   const tempDir = path.join(__dirname, "temp", operationId);
   console.log(`[${operationId}] Creating temporary directory: ${tempDir}`);
@@ -252,11 +251,11 @@ router.post("/merge", async (req, res) => {
 
     const finalOutput = path.join(tempDir, outputName);
     console.log(`[${operationId}] Starting mergeAudioFiles function. Output will be: ${finalOutput}`);
-    await mergeAudioFiles(audioPaths, musicPath, finalOutput, mBreakIndex); // Use parsed mBreakIndex
+    await mergeAudioFiles(audioPaths, musicPath, finalOutput, mBreakIndex);
     console.log(`[${operationId}] mergeAudioFiles function completed.`);
 
     console.log(`[${operationId}] Uploading final output to Cloudinary: ${finalOutput}`);
-    const cloudUrl = await uploadToCloudinary(finalOutput, "audio-webflow", outputName);
+    const cloudUrl = await uploadToCloudinary(finalOutput, "audio-webflow", outputName); // This call should now work
     console.log(`[${operationId}] Upload to Cloudinary successful. URL: ${cloudUrl}`);
 
     console.log(`[${operationId}] Cleaning up local downloaded dialogue clips...`);
@@ -269,8 +268,6 @@ router.post("/merge", async (req, res) => {
         }
       }
     });
-    // musicPath is deleted inside mergeAudioFiles (as fadedMusic or original if processing changes)
-    // finalOutput is also deleted inside tempDir cleanup
 
     console.log(`[${operationId}] Attempting Cloudinary source chunk cleanup...`);
     try {
@@ -293,7 +290,6 @@ router.post("/merge", async (req, res) => {
   } catch (err) {
     console.error(`[${operationId}] 🔥 Merge Error:`, err.message || err);
     console.error(`[${operationId}] Full error object:`, err);
-    // Cleanup tempDir even on error
     if (fs.existsSync(tempDir)) {
         console.log(`[${operationId}] Cleaning up temporary directory due to error: ${tempDir}`);
         try {
