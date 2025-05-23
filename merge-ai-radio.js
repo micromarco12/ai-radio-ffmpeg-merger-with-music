@@ -55,29 +55,26 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
     convertedFiles.push(output);
   }
 
-  const fadedMusic = path.join(tempDir, "music-faded.mp3");
+  const alexPath = convertedFiles[musicInsertIndex];
+  const musicInput = musicPath;
+  const mixedOutput = path.join(tempDir, "mixed-intro.mp3");
 
-  if (useShortMusic) {
-    await new Promise((resolve, reject) => {
-      exec(`ffmpeg -i "${musicPath}" -t 30 -af "afade=t=in:ss=0:d=2,afade=t=out:st=28:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
-    });
-  } else {
-    await new Promise((resolve, reject) => {
-      exec(`ffmpeg -i "${musicPath}" -af "afade=t=in:ss=0:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err) => err ? reject(err) : resolve());
-    });
-  }
+  const alexDuration = await getAudioDuration(alexPath);
+  const musicOffset = Math.max(0, Math.floor((alexDuration - 3) * 1000));
+
+  await new Promise((resolve, reject) => {
+    const cmd = `ffmpeg -i "${alexPath}" -i "${musicInput}" -filter_complex "[1:a]adelay=${musicOffset}|${musicOffset}[bg];[0:a][bg]amix=inputs=2:duration=longest:dropout_transition=3" -c:a libmp3lame -b:a 256k -y "${mixedOutput}"`;
+    exec(cmd, (err) => (err ? reject(err) : resolve()));
+  });
 
   const finalListPath = path.join(tempDir, "final-list.txt");
   const finalConcatList = [];
 
   for (let i = 0; i < convertedFiles.length; i++) {
-    finalConcatList.push(`file '${convertedFiles[i]}'`);
     if (i === musicInsertIndex) {
-      const shiftedMusic = path.join(tempDir, "music-shifted.mp3");
-      await new Promise((resolve, reject) => {
-        exec(`ffmpeg -i "${fadedMusic}" -ss 3 -y "${shiftedMusic}"`, (err) => err ? reject(err) : resolve());
-      });
-      finalConcatList.push(`file '${shiftedMusic}'`);
+      finalConcatList.push(`file '${mixedOutput}'`);
+    } else {
+      finalConcatList.push(`file '${convertedFiles[i]}'`);
     }
   }
 
@@ -89,7 +86,7 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
 
   fs.rmSync(convertedDir, { recursive: true, force: true });
   fs.unlinkSync(finalListPath);
-  fs.unlinkSync(fadedMusic);
+  fs.unlinkSync(mixedOutput);
 };
 
 const uploadToCloudinary = (filePath, folder, outputName) => {
