@@ -6,10 +6,8 @@ const cloudinary = require("cloudinary").v2;
 const { exec } = require("child_process");
 const path = require("path");
 
-// Toggle to control music length during testing
-const useShortMusic = true; // ✅ Set to false when you're ready for full songs
+const useShortMusic = true; 
 const router = express.Router();
-// const config = require("./settings.json"); // Not currently used, can be uncommented if needed later
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -27,7 +25,6 @@ const downloadFile = async (url, outputPath) => {
   });
 };
 
-// Helper function to get audio duration using ffprobe
 const getAudioDuration = (filePath) => {
   return new Promise((resolve, reject) => {
     const command = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
@@ -49,13 +46,12 @@ const getAudioDuration = (filePath) => {
   });
 };
 
-// Function to upload to Cloudinary (from your original script structure)
 const uploadToCloudinary = (filePath, folder, outputName) => {
   return new Promise((resolve, reject) => {
     cloudinary.uploader.upload(
       filePath,
       {
-        resource_type: "video", // Assuming audio is treated as video for storage if mp3
+        resource_type: "video",
         folder,
         public_id: path.parse(outputName).name,
         overwrite: true,
@@ -78,7 +74,7 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
   for (let i = 0; i < filePaths.length; i++) {
     const input = filePaths[i];
     const output = path.join(convertedDir, `converted-${i}.mp3`);
-    console.log(`Converting dialogue clip: ${input} to ${output}`);
+    // console.log(`Converting dialogue clip: ${input} to ${output}`); // Less verbose
     await new Promise((resolve, reject) => {
       exec(`ffmpeg -i "${input}" -ac 2 -ar 44100 -y "${output}"`, (err, stdout, stderr) => {
         if (err) {
@@ -90,98 +86,133 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
     });
     convertedFiles.push(output);
   }
-  console.log("Converted dialogue files:", convertedFiles);
+  console.log("Converted dialogue files created.");
 
   const fadedMusic = path.join(tempDir, "music-faded.mp3");
-  console.log(`Processing music file: ${musicPath} to ${fadedMusic}`);
-
+  // console.log(`Processing music file: ${musicPath} to ${fadedMusic}`); // Less verbose
   if (useShortMusic) {
     await new Promise((resolve, reject) => {
       exec(`ffmpeg -i "${musicPath}" -t 30 -af "afade=t=in:ss=0:d=2,afade=t=out:st=28:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err, stdout, stderr) => {
-        if (err) {
-          console.error(`FFMPEG short music processing error for ${musicPath}: ${stderr}`);
-          return reject(err);
-        }
+        if (err) { console.error(`FFMPEG short music processing error for ${musicPath}: ${stderr}`); return reject(err); }
         resolve();
       });
     });
   } else {
     await new Promise((resolve, reject) => {
       exec(`ffmpeg -i "${musicPath}" -af "afade=t=in:ss=0:d=2" -ar 44100 -ac 2 -y "${fadedMusic}"`, (err, stdout, stderr) => {
-        if (err) {
-          console.error(`FFMPEG full music processing error for ${musicPath}: ${stderr}`);
-          return reject(err);
-        }
+        if (err) { console.error(`FFMPEG full music processing error for ${musicPath}: ${stderr}`); return reject(err); }
         resolve();
       });
     });
   }
   console.log("Processed music file created:", fadedMusic);
 
-  // --- GET DURATIONS ---
   let durationAlexAnnounce = 0;
   let durationMusic = 0;
-  let durationAlexWelcome = 0;
+  // let durationAlexWelcome = 0; // We'll use this later
   const overlapTimeSeconds = 3.0;
 
   if (musicInsertIndex < 0 || musicInsertIndex >= convertedFiles.length) {
     throw new Error(`Invalid musicInsertIndex ${musicInsertIndex} for convertedFiles array of length ${convertedFiles.length}`);
   }
   const alexAnnouncePath = convertedFiles[musicInsertIndex];
-
-  let alexWelcomePath;
-  if (musicInsertIndex + 2 < convertedFiles.length) {
-    alexWelcomePath = convertedFiles[musicInsertIndex + 2];
-  } else {
-    console.warn(`Not enough audio clips after musicInsertIndex to identify Alex's welcome back at index ${musicInsertIndex + 2}. Skipping duration fetch for it.`);
-  }
+  // const alexWelcomePath = musicInsertIndex + 2 < convertedFiles.length ? convertedFiles[musicInsertIndex + 2] : null; // For later
 
   try {
     if (alexAnnouncePath && fs.existsSync(alexAnnouncePath)) {
       durationAlexAnnounce = await getAudioDuration(alexAnnouncePath);
       console.log(`Alex Announce Clip: ${alexAnnouncePath}, Duration: ${durationAlexAnnounce}s`);
-    } else {
-      console.warn(`Alex announcement clip path not found or invalid: ${alexAnnouncePath}. Using duration 0.`);
-    }
+    } else { console.warn(`Alex announcement clip path not found: ${alexAnnouncePath}`); }
     
     if (fs.existsSync(fadedMusic)) {
       durationMusic = await getAudioDuration(fadedMusic);
       console.log(`Music Clip: ${fadedMusic}, Duration: ${durationMusic}s`);
-    } else {
-      throw new Error(`Processed music file not found: ${fadedMusic}`);
-    }
+    } else { throw new Error(`Processed music file not found: ${fadedMusic}`); }
 
-    if (alexWelcomePath && fs.existsSync(alexWelcomePath)) {
-      durationAlexWelcome = await getAudioDuration(alexWelcomePath);
-      console.log(`Alex Welcome Clip: ${alexWelcomePath}, Duration: ${durationAlexWelcome}s`);
-    } else {
-      console.warn(`Alex welcome back clip path not found or invalid: ${alexWelcomePath}. Using duration 0.`);
-    }
+    // if (alexWelcomePath && fs.existsSync(alexWelcomePath)) { // For later
+    //   durationAlexWelcome = await getAudioDuration(alexWelcomePath);
+    //   console.log(`Alex Welcome Clip: ${alexWelcomePath}, Duration: ${durationAlexWelcome}s`);
+    // } else { console.warn(`Alex welcome back clip path not found: ${alexWelcomePath}`); }
 
     if (durationAlexAnnounce > 0 && durationAlexAnnounce <= overlapTimeSeconds) {
-      console.warn(`Warning: Alex's announcement clip (${durationAlexAnnounce}s) is shorter/equal to overlap time (${overlapTimeSeconds}s). Ducking intro might be problematic.`);
+      console.warn(`Warning: Alex's announcement (${durationAlexAnnounce}s) is too short for the full ${overlapTimeSeconds}s overlap.`);
     }
-    if (durationMusic > 0 && durationMusic <= overlapTimeSeconds * 2) {
-      console.warn(`Warning: Music clip (${durationMusic}s) is very short relative to overlaps.`);
-    }
+  } catch (err) { console.error("Error getting audio durations:", err.message); throw err; }
 
-  } catch (err) {
-    console.error("Error getting audio durations:", err.message);
-    throw err; 
-  }
-  // --- END GET DURATIONS ---
+  // --- NEW FFMPEG LOGIC FOR TRANSITION 1 ---
+  const transition1Output = path.join(tempDir, "transition1_announce_ducked.mp3");
+  const musicStartTimeInAnnounce = Math.max(0, durationAlexAnnounce - overlapTimeSeconds); // In seconds
+  const musicDelayMs = musicStartTimeInAnnounce * 1000;
 
-  // Original FFMPEG concat logic (to be replaced later with ducking logic)
-  console.log("Creating final concatenation list...");
+  // Ducking parameters (can be tweaked)
+  const duckingThreshold = "0.1"; // approx -20dB assuming peak is 1.0
+  const duckingRatio = "5";
+  const duckingAttack = "50"; // ms
+  const duckingRelease = "500"; // ms
+
+  // This command creates the first transition: Alex's full announcement,
+  // with music starting 'overlapTimeSeconds' before he ends, ducked under him.
+  const ffmpegTransition1Command = `ffmpeg -i "${alexAnnouncePath}" -i "${fadedMusic}" -filter_complex "[0:a]asplit[alex_main][alex_sidechain]; [1:a]adelay=${musicDelayMs}|${musicDelayMs}[delayed_music]; [alex_sidechain][delayed_music]sidechaincompress=threshold=${duckingThreshold}:ratio=${duckingRatio}:attack=${duckingAttack}:release=${duckingRelease}[ducked_music]; [alex_main][ducked_music]amix=inputs=2:duration=first[mixed_output]" -map "[mixed_output]" -c:a libmp3lame -b:a 192k -ar 44100 -ac 2 -y "${transition1Output}"`;
+
+  console.log("Executing FFMPEG for Transition 1 (Announce Outro/Music Intro):");
+  console.log(ffmpegTransition1Command);
+  await new Promise((resolve, reject) => {
+    exec(ffmpegTransition1Command, (err, stdout, stderr) => {
+      if (err) {
+        console.error(`FFMPEG Transition 1 error: ${stderr}`);
+        return reject(err);
+      }
+      console.log("Transition 1 created successfully:", transition1Output);
+      resolve();
+    });
+  });
+  // --- END FFMPEG LOGIC FOR TRANSITION 1 ---
+
+  // --- MODIFIED Concatenation List for THIS TEST ---
+  // This is simplified to test transition1. We will make it more complete later.
+  console.log("Creating simplified final concatenation list for testing Transition 1...");
   const finalListPath = path.join(tempDir, "final-list.txt");
   const finalConcatList = [];
-  for (let i = 0; i < convertedFiles.length; i++) {
+
+  // 1. Add clips before Alex's announcement
+  for (let i = 0; i < musicInsertIndex; i++) {
     finalConcatList.push(`file '${convertedFiles[i]}'`);
-    if (i === musicInsertIndex) {
-      console.log(`Adding music file '${fadedMusic}' to concat list after clip index ${i}`);
-      finalConcatList.push(`file '${fadedMusic}'`);
+  }
+
+  // 2. Add the new transition1 clip (which contains Alex's full announcement + music intro)
+  finalConcatList.push(`file '${transition1Output}'`);
+
+  // 3. Add the rest of the music (for this test, let's trim it simply)
+  // The music in transition1 played for overlapTimeSeconds from its start.
+  // So, the rest of the music starts from overlapTimeSeconds.
+  if (durationMusic > overlapTimeSeconds) {
+    const musicRestPath = path.join(tempDir, "music_rest.mp3");
+    const musicRestStartTime = overlapTimeSeconds;
+    // For now, let's just take the remainder of the fadedMusic (which might be short if useShortMusic=true)
+    // Later we'll calculate precisely how much music to play before the next transition.
+    const musicRestDuration = durationMusic - overlapTimeSeconds; 
+    if (musicRestDuration > 0) {
+        const ffmpegMusicRestCommand = `ffmpeg -i "${fadedMusic}" -ss ${musicRestStartTime} -t ${musicRestDuration} -c:a libmp3lame -b:a 192k -ar 44100 -ac 2 -y "${musicRestPath}"`;
+        console.log("Creating rest of music segment:", ffmpegMusicRestCommand);
+        await new Promise((resolve, reject) => {
+            exec(ffmpegMusicRestCommand, (err, stdout, stderr) => {
+            if (err) { console.error(`FFMPEG music rest error: ${stderr}`); return reject(err); }
+            finalConcatList.push(`file '${musicRestPath}'`);
+            resolve();
+            });
+        });
+    } else {
+        console.log("No significant music duration left after intro overlap.");
     }
   }
+
+  // 4. Add clips after Alex's welcome back (for this test, starting from musicInsertIndex + 2)
+  // We are SKIPPING Jamie's silent turn (musicInsertIndex + 1) and Alex's welcome (musicInsertIndex + 2) for now,
+  // as the welcome back transition isn't built yet.
+  for (let i = musicInsertIndex + 3; i < convertedFiles.length; i++) {
+    finalConcatList.push(`file '${convertedFiles[i]}'`);
+  }
+  
   fs.writeFileSync(finalListPath, finalConcatList.join("\n"));
   console.log("Concatenation list created:", finalListPath);
   console.log("Final concatenation list content:\n", finalConcatList.join("\n"));
@@ -203,6 +234,10 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
     if (fs.existsSync(convertedDir)) fs.rmSync(convertedDir, { recursive: true, force: true });
     if (fs.existsSync(finalListPath)) fs.unlinkSync(finalListPath);
     if (fs.existsSync(fadedMusic)) fs.unlinkSync(fadedMusic);
+    if (fs.existsSync(transition1Output)) fs.unlinkSync(transition1Output);
+    const musicRestPathCheck = path.join(tempDir, "music_rest.mp3");
+    if (fs.existsSync(musicRestPathCheck)) fs.unlinkSync(musicRestPathCheck);
+
   } catch (cleanupErr) {
     console.warn("Warning: Error during cleanup of some temporary files:", cleanupErr.message);
   }
@@ -238,14 +273,14 @@ router.post("/merge", async (req, res) => {
     console.log(`[${operationId}] Downloading ${inputUrls.length} dialogue clips...`);
     for (let i = 0; i < inputUrls.length; i++) {
       const audioPath = path.join(tempDir, `dialogue-clip-${i}.mp3`);
-      console.log(`[${operationId}] Downloading dialogue clip ${i}: ${inputUrls[i]} to ${audioPath}`);
+      // console.log(`[${operationId}] Downloading dialogue clip ${i}: ${inputUrls[i]} to ${audioPath}`); // Less verbose
       await downloadFile(inputUrls[i], audioPath);
       audioPaths.push(audioPath);
     }
     console.log(`[${operationId}] All dialogue clips downloaded.`);
 
     const musicPath = path.join(tempDir, "background-music-original.mp3");
-    console.log(`[${operationId}] Downloading music: ${musicUrl} to ${musicPath}`);
+    // console.log(`[${operationId}] Downloading music: ${musicUrl} to ${musicPath}`); // Less verbose
     await downloadFile(musicUrl, musicPath);
     console.log(`[${operationId}] Music downloaded.`);
 
@@ -255,17 +290,13 @@ router.post("/merge", async (req, res) => {
     console.log(`[${operationId}] mergeAudioFiles function completed.`);
 
     console.log(`[${operationId}] Uploading final output to Cloudinary: ${finalOutput}`);
-    const cloudUrl = await uploadToCloudinary(finalOutput, "audio-webflow", outputName); // This call should now work
+    const cloudUrl = await uploadToCloudinary(finalOutput, "audio-webflow", outputName);
     console.log(`[${operationId}] Upload to Cloudinary successful. URL: ${cloudUrl}`);
 
     console.log(`[${operationId}] Cleaning up local downloaded dialogue clips...`);
     audioPaths.forEach(p => {
       if (fs.existsSync(p)) {
-        try {
-          fs.unlinkSync(p);
-        } catch (e) {
-          console.warn(`[${operationId}] Warn: Failed to delete local dialogue clip ${p}: ${e.message}`);
-        }
+        try { fs.unlinkSync(p); } catch (e) { console.warn(`[${operationId}] Warn: Failed to delete local dialogue clip ${p}: ${e.message}`); }
       }
     });
 
@@ -292,11 +323,7 @@ router.post("/merge", async (req, res) => {
     console.error(`[${operationId}] Full error object:`, err);
     if (fs.existsSync(tempDir)) {
         console.log(`[${operationId}] Cleaning up temporary directory due to error: ${tempDir}`);
-        try {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch (cleanupErr) {
-            console.error(`[${operationId}] Error during cleanup on error: ${cleanupErr.message}`);
-        }
+        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (cleanupErr) { console.error(`[${operationId}] Error during cleanup on error: ${cleanupErr.message}`);}
     }
     res.status(500).json({ error: "Failed to merge audio", details: err.message });
   }
