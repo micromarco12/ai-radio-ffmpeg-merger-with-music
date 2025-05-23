@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require("uuid");
 const cloudinary = require("cloudinary").v2;
 const { exec } = require("child_process");
 const path = require("path");
-const settings = require("./ffmpeg.settings.js");
+const ffmpegSettings = require("./ffmpeg.settings.js");
 
 const getAudioDuration = (filePath) => {
   return new Promise((resolve, reject) => {
@@ -57,7 +57,7 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
   const normalizedMusic = path.join(tempDir, "music-normalized.mp3");
   const mixedOutput = path.join(tempDir, "mixed-intro.mp3");
 
-  if (settings.normalizeMusic) {
+  if (ffmpegSettings.normalizeMusic) {
     await new Promise((resolve, reject) => {
       exec(`ffmpeg -i "${musicPath}" -af loudnorm=I=-16:LRA=11:TP=-1.5 -ar 44100 -ac 2 -y "${normalizedMusic}"`, (err) => err ? reject(err) : resolve());
     });
@@ -66,10 +66,10 @@ const mergeAudioFiles = async (filePaths, musicPath, outputPath, musicInsertInde
   }
 
   const alexDuration = await getAudioDuration(alexPath);
-  const musicOffset = Math.max(0, Math.floor((alexDuration - settings.introDelaySeconds) * 1000));
+  const musicOffset = Math.max(0, Math.floor((alexDuration - ffmpegSettings.introDelaySeconds) * 1000));
 
   await new Promise((resolve, reject) => {
-    const cmd = `ffmpeg -i "${alexPath}" -i "${normalizedMusic}" -filter_complex "[0:a]volume=${settings.voiceBoost}[a0];[1:a]adelay=${musicOffset}|${musicOffset},volume=${settings.musicReduction}[bg];[a0][bg]amix=inputs=2:duration=longest:dropout_transition=3" -c:a libmp3lame -b:a 256k -y "${mixedOutput}"`;
+    const cmd = `ffmpeg -i "${alexPath}" -i "${normalizedMusic}" -filter_complex "[0:a]volume=${ffmpegSettings.voiceBoost}[a0];[1:a]adelay=${musicOffset}|${musicOffset},volume=${ffmpegSettings.musicReduction}[bg];[a0][bg]amix=inputs=2:duration=longest:dropout_transition=3" -c:a libmp3lame -b:a 256k -y "${mixedOutput}"`;
     exec(cmd, (err) => (err ? reject(err) : resolve()));
   });
 
