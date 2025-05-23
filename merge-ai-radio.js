@@ -5,6 +5,20 @@ const { v4: uuidv4 } = require("uuid");
 const cloudinary = require("cloudinary").v2;
 const { exec } = require("child_process");
 const path = require("path");
+
+// ✅ Utility function to get duration of an audio file
+const getAudioDuration = (filePath) => {
+  return new Promise((resolve, reject) => {
+    exec(
+      `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
+      (error, stdout) => {
+        if (error) return reject(error);
+        resolve(parseFloat(stdout.trim()));
+      }
+    );
+  });
+};
+
 // Toggle to control music length during testing
 const useShortMusic = true; // ✅ Set to false when you're ready for full songs
 const router = express.Router();
